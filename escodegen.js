@@ -1696,6 +1696,13 @@
             } else {
                 stmt.guardedHandlers = stmt.guardedHandlers || [];
 
+                for (i = 0, len = stmt.guardedHandlers.length; i < len; ++i) {
+                    result = join(result, generateStatement(stmt.guardedHandlers[i]));
+                    if (stmt.finalizer || i + 1 !== len) {
+                        result = maybeBlockSuffix(stmt.guardedHandlers[i].body, result);
+                    }
+                }
+
                 // new interface
                 if (stmt.handler) {
                     if (isArray(stmt.handler)) {
@@ -1707,16 +1714,9 @@
                         }
                     } else {
                         result = join(result, generateStatement(stmt.handler));
-                        if (stmt.finalizer || stmt.guardedHandlers.length > 0) {
+                        if (stmt.finalizer) {
                             result = maybeBlockSuffix(stmt.handler.body, result);
                         }
-                    }
-                }
-
-                for (i = 0, len = stmt.guardedHandlers.length; i < len; ++i) {
-                    result = join(result, generateStatement(stmt.guardedHandlers[i]));
-                    if (stmt.finalizer || i + 1 !== len) {
-                        result = maybeBlockSuffix(stmt.guardedHandlers[i].body, result);
                     }
                 }
             }
