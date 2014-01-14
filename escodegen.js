@@ -227,67 +227,6 @@
         };
     }
 
-    // Fallback for the non SourceMap environment
-    function SourceNodeMock(line, column, filename, chunk) {
-        var result = [];
-
-        function flatten(input) {
-            var i, iz;
-            if (isArray(input)) {
-                for (i = 0, iz = input.length; i < iz; ++i) {
-                    flatten(input[i]);
-                }
-            } else if (input instanceof SourceNodeMock) {
-                result.push(input);
-            } else if (typeof input === 'string' && input) {
-                result.push(input);
-            }
-        }
-
-        flatten(chunk);
-        this.children = result;
-    }
-
-    SourceNodeMock.prototype.toString = function toString() {
-        var res = '', i, iz, node;
-        for (i = 0, iz = this.children.length; i < iz; ++i) {
-            node = this.children[i];
-            if (node instanceof SourceNodeMock) {
-                res += node.toString();
-            } else {
-                res += node;
-            }
-        }
-        return res;
-    };
-
-    SourceNodeMock.prototype.replaceRight = function replaceRight(pattern, replacement) {
-        var last = this.children[this.children.length - 1];
-        if (last instanceof SourceNodeMock) {
-            last.replaceRight(pattern, replacement);
-        } else if (typeof last === 'string') {
-            this.children[this.children.length - 1] = last.replace(pattern, replacement);
-        } else {
-            this.children.push(''.replace(pattern, replacement));
-        }
-        return this;
-    };
-
-    SourceNodeMock.prototype.join = function join(sep) {
-        var i, iz, result;
-        result = [];
-        iz = this.children.length;
-        if (iz > 0) {
-            --iz;
-            for (i = 0; i < iz; ++i) {
-                result.push(this.children[i], sep);
-            }
-            result.push(this.children[iz]);
-            this.children = result;
-        }
-        return this;
-    };
-
     function hasLineTerminator(str) {
         return (/[\r\n]/g).test(str);
     }
@@ -554,7 +493,33 @@
         return result + quote;
     }
 
-    function toSourceNode(generated, node) {
+    /**
+     * flatten an array to a string, where the array can contain
+     * either strings or nested arrays
+     */
+    function flattenToString(arr) {
+        var i, iz, elem, result = '';
+        for (i = 0, iz = arr.length; i < iz; ++i) {
+            elem = arr[i];
+            result += isArray(elem) ? flattenToString(elem) : elem;
+        }
+        return result;
+    }
+
+    /**
+     * convert generated to a SourceNode when source maps are enabled.
+     */
+    function toSourceNodeWhenNeeded(generated, node) {
+        if (!sourceMap) {
+            // with no source maps, generated is either an
+            // array or a string.  if an array, flatten it.
+            // if a string, just return it
+            if (isArray(generated)) {
+                return flattenToString(generated);
+            } else {
+                return generated;
+            }
+        }
         if (node == null) {
             if (generated instanceof SourceNode) {
                 return generated;
@@ -573,8 +538,8 @@
     }
 
     function join(left, right) {
-        var leftSource = toSourceNode(left).toString(),
-            rightSource = toSourceNode(right).toString(),
+        var leftSource = toSourceNodeWhenNeeded(left).toString(),
+            rightSource = toSourceNodeWhenNeeded(right).toString(),
             leftCharCode = leftSource.charCodeAt(leftSource.length - 1),
             rightCharCode = rightSource.charCodeAt(0);
 
@@ -613,7 +578,7 @@
     }
 
     function adjustMultilineComment(value, specialBase) {
-        var array, i, len, line, j, spaces, previousBase;
+        var array, i, len, line, j, spaces, previousBase, sn;
 
         array = value.split(/\r\n|[\r\n]/);
         spaces = Number.MAX_VALUE;
@@ -655,7 +620,8 @@
         }
 
         for (i = 1, len = array.length; i < len; ++i) {
-            array[i] = toSourceNode(addIndent(array[i].slice(spaces))).join('');
+            sn = toSourceNodeWhenNeeded(addIndent(array[i].slice(spaces)));
+            array[i] = sourceMap ? sn.join('') : sn;
         }
 
         base = previousBase;
@@ -690,14 +656,14 @@
                 result.push('\n');
             }
             result.push(generateComment(comment));
-            if (!endsWithLineTerminator(toSourceNode(result).toString())) {
+            if (!endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString())) {
                 result.push('\n');
             }
 
             for (i = 1, len = stmt.leadingComments.length; i < len; ++i) {
                 comment = stmt.leadingComments[i];
                 fragment = [generateComment(comment)];
-                if (!endsWithLineTerminator(toSourceNode(fragment).toString())) {
+                if (!endsWithLineTerminator(toSourceNodeWhenNeeded(fragment).toString())) {
                     fragment.push('\n');
                 }
                 result.push(addIndent(fragment));
@@ -707,8 +673,8 @@
         }
 
         if (stmt.trailingComments) {
-            tailingToStatement = !endsWithLineTerminator(toSourceNode(result).toString());
-            specialBase = stringRepeat(' ', calculateSpaces(toSourceNode([base, result, indent]).toString()));
+            tailingToStatement = !endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString());
+            specialBase = stringRepeat(' ', calculateSpaces(toSourceNodeWhenNeeded([base, result, indent]).toString()));
             for (i = 0, len = stmt.trailingComments.length; i < len; ++i) {
                 comment = stmt.trailingComments[i];
                 if (tailingToStatement) {
@@ -727,7 +693,7 @@
                 } else {
                     result = [result, addIndent(generateComment(comment))];
                 }
-                if (i !== len - 1 && !endsWithLineTerminator(toSourceNode(result).toString())) {
+                if (i !== len - 1 && !endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString())) {
                     result = [result, '\n'];
                 }
             }
@@ -764,7 +730,7 @@
     }
 
     function maybeBlockSuffix(stmt, result) {
-        var ends = endsWithLineTerminator(toSourceNode(result).toString());
+        var ends = endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString());
         if (stmt.type === Syntax.BlockStatement && (!extra.comment || !stmt.leadingComments) && !ends) {
             return [result, space];
         }
@@ -782,24 +748,24 @@
         }
 
         result = parenthesize(result, Precedence.Sequence, option.precedence);
-        return toSourceNode(result, expr);
+        return toSourceNodeWhenNeeded(result, expr);
     }
 
     function generateIdentifier(node) {
-        return toSourceNode(node.name, node);
+        return toSourceNodeWhenNeeded(node.name, node);
     }
 
     function generatePattern(node, options) {
         var result;
 
-        if (node.type === Syntax.ArrayPattern || node.type === Syntax.ObjectPattern) {
+        if (node.type === Syntax.Identifier) {
+            result = generateIdentifier(node);
+        } else {
             result = generateExpression(node, {
                 precedence: options.precedence,
                 allowIn: options.allowIn,
                 allowCall: true
             });
-        } else {
-            result = generateIdentifier(node);
         }
 
         return result;
@@ -1068,7 +1034,7 @@
                 }), ']');
             } else {
                 if (expr.object.type === Syntax.Literal && typeof expr.object.value === 'number') {
-                    fragment = toSourceNode(result).toString();
+                    fragment = toSourceNodeWhenNeeded(result).toString();
                     // When the following conditions are all true,
                     //   1. No floating point
                     //   2. Don't have exponents
@@ -1108,7 +1074,7 @@
                 } else {
                     // Prevent inserting spaces between operator and argument if it is unnecessary
                     // like, `!cond`
-                    leftSource = toSourceNode(result).toString();
+                    leftSource = toSourceNodeWhenNeeded(result).toString();
                     leftCharCode = leftSource.charCodeAt(leftSource.length - 1);
                     rightCharCode = fragment.toString().charCodeAt(0);
 
@@ -1215,7 +1181,7 @@
                     }
                 }
             });
-            if (multiline && !endsWithLineTerminator(toSourceNode(result).toString())) {
+            if (multiline && !endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString())) {
                 result.push(newline);
             }
             result.push(multiline ? base : '', ']');
@@ -1292,7 +1258,7 @@
                 // to
                 //   dejavu.Class.declare({method2: function () {
                 //       }});
-                if (!hasLineTerminator(toSourceNode(fragment).toString())) {
+                if (!hasLineTerminator(toSourceNodeWhenNeeded(fragment).toString())) {
                     result = [ '{', space, fragment, space, '}' ];
                     break;
                 }
@@ -1317,7 +1283,7 @@
                 }
             });
 
-            if (!endsWithLineTerminator(toSourceNode(result).toString())) {
+            if (!endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString())) {
                 result.push(newline);
             }
             result.push(base, '}');
@@ -1359,7 +1325,7 @@
                 }
             });
 
-            if (multiline && !endsWithLineTerminator(toSourceNode(result).toString())) {
+            if (multiline && !endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString())) {
                 result.push(newline);
             }
             result.push(multiline ? base : '', '}');
@@ -1506,7 +1472,7 @@
             throw new Error('Unknown expression type: ' + expr.type);
         }
 
-        return toSourceNode(result, expr);
+        return toSourceNodeWhenNeeded(result, expr);
     }
 
     function generateStatement(stmt, option) {
@@ -1544,7 +1510,7 @@
                         directiveContext: functionBody
                     }));
                     result.push(fragment);
-                    if (!endsWithLineTerminator(toSourceNode(fragment).toString())) {
+                    if (!endsWithLineTerminator(toSourceNodeWhenNeeded(fragment).toString())) {
                         result.push(newline);
                     }
                 }
@@ -1644,7 +1610,7 @@
             })];
             // 12.4 '{', 'function' is not allowed in this position.
             // wrap expression with parentheses
-            fragment = toSourceNode(result).toString();
+            fragment = toSourceNodeWhenNeeded(result).toString();
             if (fragment.charAt(0) === '{' ||  // ObjectExpression
                     (fragment.slice(0, 8) === 'function' && '* ('.indexOf(fragment.charAt(8)) >= 0) ||  // function or generator
                     (directive && directiveContext && stmt.expression.type === Syntax.Literal && typeof stmt.expression.value === 'string')) {
@@ -1755,7 +1721,7 @@
                 for (i = 0, len = stmt.cases.length; i < len; ++i) {
                     fragment = addIndent(generateStatement(stmt.cases[i], {semicolonOptional: i === len - 1}));
                     result.push(fragment);
-                    if (!endsWithLineTerminator(toSourceNode(fragment).toString())) {
+                    if (!endsWithLineTerminator(toSourceNodeWhenNeeded(fragment).toString())) {
                         result.push(newline);
                     }
                 }
@@ -1786,14 +1752,14 @@
                     i = 1;
                 }
 
-                if (i !== len && !endsWithLineTerminator(toSourceNode(result).toString())) {
+                if (i !== len && !endsWithLineTerminator(toSourceNodeWhenNeeded(result).toString())) {
                     result.push(newline);
                 }
 
                 for (; i < len; ++i) {
                     fragment = addIndent(generateStatement(stmt.consequent[i], {semicolonOptional: i === len - 1 && semicolon === ''}));
                     result.push(fragment);
-                    if (i + 1 !== len && !endsWithLineTerminator(toSourceNode(fragment).toString())) {
+                    if (i + 1 !== len && !endsWithLineTerminator(toSourceNodeWhenNeeded(fragment).toString())) {
                         result.push(newline);
                     }
                 }
@@ -1911,7 +1877,7 @@
                     })
                 );
                 result.push(fragment);
-                if (i + 1 < len && !endsWithLineTerminator(toSourceNode(fragment).toString())) {
+                if (i + 1 < len && !endsWithLineTerminator(toSourceNodeWhenNeeded(fragment).toString())) {
                     result.push(newline);
                 }
             }
@@ -1982,12 +1948,12 @@
             result = addCommentsToStatement(stmt, result);
         }
 
-        fragment = toSourceNode(result).toString();
+        fragment = toSourceNodeWhenNeeded(result).toString();
         if (stmt.type === Syntax.Program && !safeConcatenation && newline === '' &&  fragment.charAt(fragment.length - 1) === '\n') {
-            result = toSourceNode(result).replaceRight(/\s+$/, '');
+            result = sourceMap ? toSourceNodeWhenNeeded(result).replaceRight(/\s+$/, '') : fragment.replace(/\s+$/, '');
         }
 
-        return toSourceNode(result, stmt);
+        return toSourceNodeWhenNeeded(result, stmt);
     }
 
     function generate(node, options) {
@@ -2044,8 +2010,6 @@
             } else {
                 SourceNode = global.sourceMap.SourceNode;
             }
-        } else {
-            SourceNode = SourceNodeMock;
         }
 
         switch (node.type) {
